@@ -1,16 +1,35 @@
-# React + Vite
+# BART Platform - Risk Taking Assessment
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Istanbul Technical University (ITU)  
+Electronics and Communication Engineering Department  
+Senior Design Project: **Neural Network-Based Modeling of Human Risk-Taking Behavior in Interactive Decision Tasks**
 
-Currently, two official plugins are available:
+An interactive web-based experimental framework combining:
+- **Balloon Analogue Risk Task (BART)**
+- **Domain-Specific Risk-Taking (DOSPERT-RT)** adapted non-monetary questionnaire
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Tech Stack
+- React 19 + Vite
+- React Router v7
+- CSS Modules / Custom Styling
 
-## React Compiler
+## Getting Started
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Prerequisites
+- Node.js (v18 or newer recommended)
 
-## Expanding the ESLint configuration
+### Installation
+```bash
+npm install
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### Running Locally
+```bash
+npm run dev
+```
+Navigate to `http://localhost:5173` in your browser.
+
+### Building for Production
+```bash
+npm run build
+```
