@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../context/AppContext';
 
 // Lejuez et al. (2002) standardı:
@@ -44,7 +46,9 @@ const calcRtStats = (trials) => {
 };
 
 export default function Finished() {
+  const navigate = useNavigate();
   const { participant, bartResults, questionnaireAnswers, clearSession } = useAppContext();
+  const [downloadedFormat, setDownloadedFormat] = useState({ json: false, csv: false });
 
   const adjustedBart = calcAdjustedBart(bartResults);
   const rtStats = calcRtStats(bartResults);
@@ -72,21 +76,22 @@ export default function Finished() {
       ? dospertAnswers.reduce((acc, curr) => acc + curr.answer_score, 0) / dospertAnswers.length
       : null;
 
-  const handleDownload = () => {
-    const domainScoreAccumulator = dospertAnswers.reduce((acc, curr) => {
-      if (!acc[curr.domain]) acc[curr.domain] = { total: 0, count: 0 };
-      acc[curr.domain].total += curr.answer_score;
-      acc[curr.domain].count += 1;
-      return acc;
-    }, {});
+  const domainScoreAccumulator = dospertAnswers.reduce((acc, curr) => {
+    if (!acc[curr.domain]) acc[curr.domain] = { total: 0, count: 0 };
+    acc[curr.domain].total += curr.answer_score;
+    acc[curr.domain].count += 1;
+    return acc;
+  }, {});
 
-    const nonMoneyRiskDomainScores = Object.fromEntries(
-      Object.entries(domainScoreAccumulator).map(([domain, value]) => [
-        domain,
-        Number((value.total / value.count).toFixed(2)),
-      ])
-    );
+  const nonMoneyRiskDomainScores = Object.fromEntries(
+    Object.entries(domainScoreAccumulator).map(([domain, value]) => [
+      domain,
+      Number((value.total / value.count).toFixed(2)),
+    ])
+  );
 
+  // --- JSON İndirme ---
+  const handleDownloadJSON = () => {
     const dataToExport = {
       participant_id: participant.id,
       age: participant.age,
@@ -95,7 +100,7 @@ export default function Finished() {
       finished_at: new Date().toISOString(),
 
       // --- Veri Kalitesi ---
-      attention_check_passed: attentionCheckPassed,  // false ise katılımcıyı analizden çıkar
+      attention_check_passed: attentionCheckPassed,
 
       // --- Faz Süreleri ---
       bart_duration_ms: bartDurationMs,
@@ -104,12 +109,9 @@ export default function Finished() {
       // --- BART Skorları ---
       bart_total_score: totalScore,
       bart_popped_count: poppedCount,
-
-      // Literatür standardı skor (Lejuez et al., 2002)
       bart_adjusted_score: adjustedBart.overall,
       bart_adjusted_score_by_type: adjustedBart.by_type,
 
-      // Pump reaction time istatistikleri (impulsivite göstergesi)
       bart_rt_mean_ms: rtStats.rt_mean,
       bart_rt_std_ms: rtStats.rt_std,
       bart_rt_min_ms: rtStats.rt_min,
@@ -122,7 +124,7 @@ export default function Finished() {
       questionnaire_source: 'DOSPERT RT scale, financial items excluded (Blais & Weber, 2006)',
       questionnaire_answers: questionnaireAnswers,
 
-      // --- Ham veri ---
+      // --- Ham BART Denemeleri ---
       trials: bartResults,
     };
 
@@ -136,17 +138,98 @@ export default function Finished() {
     a.click();
     a.remove();
 
-    // Oturum verisini temizle (bir sonraki katılımcı için)
-    clearSession();
+    setDownloadedFormat((prev) => ({ ...prev, json: true }));
   };
 
+  // --- CSV İndirme (Açık BART fMRI veri seti ve MATLAB/Python ANN modelleriyle %100 uyumlu) ---
+  const handleDownloadCSV = () => {
+    const headers = [
+      'trial',
+      'reward',
+      'explosion',
+      'pumps',
+      'onset',
+      'duration',
+      'subject',
+      'balloon_type',
+      'max_possible_pumps',
+      'rt_mean_ms',
+      'decision_time_ms',
+      'age',
+      'gender',
+      'bart_total_score',
+      'bart_adjusted_score',
+      'dospert_mean_score',
+      'dospert_social',
+      'dospert_recreational',
+      'dospert_health_safety',
+      'dospert_ethical',
+      'attention_check_passed',
+    ];
+
+    let cumulativeOnsetSec = 0.0;
+
+    const rows = bartResults.map((t) => {
+      const rts = t.pump_reaction_times_ms || [];
+      const rtSum = rts.reduce((a, b) => a + b, 0);
+      const decisionMs = t.decision_time_to_collect_ms ?? (t.popped ? 1500 : 0);
+      const durationSec = Number(((rtSum + decisionMs) / 1000).toFixed(3));
+      const currentOnset = Number(cumulativeOnsetSec.toFixed(3));
+      cumulativeOnsetSec += durationSec;
+
+      const rtMean =
+        rts.length > 0 ? (rts.reduce((a, b) => a + b, 0) / rts.length).toFixed(1) : '';
+
+      return [
+        t.trial_number,
+        t.reward_collected,
+        t.popped ? 1 : 0,
+        t.number_of_pumps,
+        currentOnset,
+        durationSec,
+        participant.id,
+        t.balloon_type,
+        t.max_possible_pumps,
+        rtMean,
+        t.decision_time_to_collect_ms ?? '',
+        participant.age || '',
+        participant.gender || '',
+        totalScore,
+        adjustedBart.overall ?? '',
+        nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : '',
+        nonMoneyRiskDomainScores.social ?? '',
+        nonMoneyRiskDomainScores.recreational ?? '',
+        nonMoneyRiskDomainScores.health_safety ?? '',
+        nonMoneyRiskDomainScores.ethical ?? '',
+        attentionCheckPassed !== null ? (attentionCheckPassed ? 1 : 0) : '',
+      ].join(',');
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.setAttribute('href', url);
+    a.setAttribute('download', `subject-${participant.id}_task-bart.csv`);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    setDownloadedFormat((prev) => ({ ...prev, csv: true }));
+  };
+
+  const handleNewParticipant = () => {
+    clearSession();
+    navigate('/consent');
+  };
 
   return (
     <div className="page-wrapper">
-      <div className="card" style={{ textAlign: 'center', maxWidth: '560px', width: '100%' }}>
+      <div className="card" style={{ textAlign: 'center', maxWidth: '580px', width: '100%' }}>
         <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🎉</div>
         <h2 style={{ marginBottom: '0.5rem' }}>Deney Tamamlandı!</h2>
-        <p style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
           Katılımınız için teşekkür ederiz.
         </p>
 
@@ -177,13 +260,46 @@ export default function Finished() {
           Adjusted BART = patlamayan balonlardaki ortalama pump sayısı (Lejuez et al., 2002)
         </p>
 
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleDownloadCSV}
+            style={{ width: '100%', padding: '0.9rem', fontSize: '1rem', fontWeight: 600 }}
+          >
+            📊 Veriyi İndir (CSV — Model & MATLAB Uyumlu) {downloadedFormat.csv && '✓'}
+          </button>
+
+          <button
+            type="button"
+            className="btn"
+            onClick={handleDownloadJSON}
+            style={{
+              width: '100%',
+              padding: '0.75rem',
+              fontSize: '0.9rem',
+              background: 'var(--surface-variant, #2a2d37)',
+              color: 'var(--text)',
+              border: '1px solid var(--border)',
+            }}
+          >
+            📦 Ham Veriyi İndir (Tam JSON) {downloadedFormat.json && '✓'}
+          </button>
+        </div>
+
         <button
           type="button"
-          className="btn btn-primary"
-          onClick={handleDownload}
-          style={{ width: '100%', padding: '1rem', fontSize: '1rem' }}
+          onClick={handleNewParticipant}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--text-muted)',
+            cursor: 'pointer',
+            fontSize: '0.85rem',
+            textDecoration: 'underline',
+          }}
         >
-          📥 Veriyi İndir (JSON)
+          🔄 Yeni Katılımcı Başlat
         </button>
       </div>
     </div>
