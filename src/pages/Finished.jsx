@@ -160,7 +160,7 @@ export default function Finished() {
     return [headers.join(','), ...rows].join('\r\n');
   }, [assignedId, bartResults, participant, totalScore, adjustedBart, nonMoneyRiskScore, nonMoneyRiskDomainScores, attentionCheckPassed]);
 
-  // --- Otomatik SheetDB Google E-Tablo Bulut Gönderimi (Her Deneme Ayrı Satır & Otomatik p1, p2...) ---
+  // --- Otomatik SheetDB Google E-Tablo Bulut Gönderimi (1 Katılımcı = 1 Satır & p1, p2, p3...) ---
   useEffect(() => {
     let isMounted = true;
 
@@ -175,8 +175,7 @@ export default function Finished() {
         if (countRes.ok) {
           const countData = await countRes.json();
           const rowsCount = typeof countData.rows === 'number' ? countData.rows : 0;
-          const participantNum = Math.floor(rowsCount / 30) + 1;
-          currentSubject = `p${participantNum}`;
+          currentSubject = `p${rowsCount + 1}`;
         }
       } catch (err) {
         console.warn('SheetDB count fetch fallback:', err);
@@ -187,44 +186,42 @@ export default function Finished() {
       }
 
       const submittedAt = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
-      let cumulativeOnsetSec = 0.0;
 
-      const dataRows = bartResults.map((t) => {
-        const rts = t.pump_reaction_times_ms || [];
-        const rtSum = rts.reduce((a, b) => a + b, 0);
-        const decisionMs = t.decision_time_to_collect_ms ?? (t.popped ? 1500 : 0);
-        const durationSec = Number(((rtSum + decisionMs) / 1000).toFixed(3));
-        const currentOnset = Number(cumulativeOnsetSec.toFixed(3));
-        cumulativeOnsetSec += durationSec;
+      // 30 denemenin kompakt JSON özeti (Perspektif C / LSTM veya zaman serisi analizi için)
+      const compactTrials = bartResults.map((t) => ({
+        trial: t.trial_number,
+        balloon: t.balloon_type,
+        max_pumps: t.max_possible_pumps,
+        pumps: t.number_of_pumps,
+        popped: t.popped ? 1 : 0,
+        reward: t.reward_collected,
+        rts: t.pump_reaction_times_ms,
+        decision_ms: t.decision_time_to_collect_ms,
+      }));
 
-        const rtMean =
-          rts.length > 0 ? Number((rts.reduce((a, b) => a + b, 0) / rts.length).toFixed(1)) : '';
-
-        return {
-          subject: currentSubject,
-          trial: t.trial_number,
-          reward: t.reward_collected,
-          explosion: t.popped ? 1 : 0,
-          pumps: t.number_of_pumps,
-          onset: currentOnset,
-          duration: durationSec,
-          balloon_type: t.balloon_type,
-          max_possible_pumps: t.max_possible_pumps,
-          rt_mean_ms: rtMean,
-          decision_time_ms: t.decision_time_to_collect_ms ?? '',
-          age: participant.age || '',
-          gender: participant.gender || '',
-          bart_total_score: totalScore,
-          bart_adjusted_score: adjustedBart.overall ?? '',
-          dospert_mean_score: nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : '',
-          dospert_social: nonMoneyRiskDomainScores.social ?? '',
-          dospert_recreational: nonMoneyRiskDomainScores.recreational ?? '',
-          dospert_health_safety: nonMoneyRiskDomainScores.health_safety ?? '',
-          dospert_ethical: nonMoneyRiskDomainScores.ethical ?? '',
-          attention_check: attentionCheckPassed ? 'Gecti' : 'Kaldi',
-          submitted_at: submittedAt,
-        };
-      });
+      const payloadRow = {
+        subject: currentSubject,
+        submitted_at: submittedAt,
+        age: participant.age || '',
+        gender: participant.gender || '',
+        attention_check: attentionCheckPassed ? 'Gecti' : 'Kaldi',
+        total_score: totalScore,
+        popped_count: poppedCount,
+        adjusted_bart: adjustedBart.overall ?? '',
+        adjusted_blue: adjustedBart.by_type?.Blue ?? '',
+        adjusted_yellow: adjustedBart.by_type?.Yellow ?? '',
+        adjusted_orange: adjustedBart.by_type?.Orange ?? '',
+        rt_mean_ms: rtStats.rt_mean ?? '',
+        rt_std_ms: rtStats.rt_std ?? '',
+        dospert_mean_score: nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : '',
+        dospert_social: nonMoneyRiskDomainScores.social ?? '',
+        dospert_recreational: nonMoneyRiskDomainScores.recreational ?? '',
+        dospert_health_safety: nonMoneyRiskDomainScores.health_safety ?? '',
+        dospert_ethical: nonMoneyRiskDomainScores.ethical ?? '',
+        bart_duration_sec: bartDurationMs ? (bartDurationMs / 1000).toFixed(1) : '',
+        dospert_duration_sec: dospertDurationMs ? (dospertDurationMs / 1000).toFixed(1) : '',
+        trials_data: JSON.stringify(compactTrials),
+      };
 
       try {
         const res = await fetch('https://sheetdb.io/api/v1/dmc35v1366pgx', {
@@ -233,7 +230,7 @@ export default function Finished() {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
           },
-          body: JSON.stringify({ data: dataRows }),
+          body: JSON.stringify({ data: [payloadRow] }),
         });
 
         if (isMounted) {
@@ -252,7 +249,7 @@ export default function Finished() {
     return () => {
       isMounted = false;
     };
-  }, [participant, bartResults, totalScore, adjustedBart, nonMoneyRiskScore, nonMoneyRiskDomainScores, attentionCheckPassed]);
+  }, [participant, bartResults, totalScore, poppedCount, adjustedBart, rtStats, nonMoneyRiskScore, nonMoneyRiskDomainScores, attentionCheckPassed, bartDurationMs, dospertDurationMs]);
 
   // --- JSON İndirme ---
   const handleDownloadJSON = () => {
