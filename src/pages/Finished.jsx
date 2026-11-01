@@ -50,6 +50,7 @@ export default function Finished() {
   const { participant, bartResults, questionnaireAnswers, clearSession } = useAppContext();
   const [downloadedFormat, setDownloadedFormat] = useState({ json: false, csv: false });
   const [cloudStatus, setCloudStatus] = useState('idle'); // 'idle' | 'sending' | 'success' | 'error'
+  const [assignedId, setAssignedId] = useState(null);
   const hasSentRef = useRef(false);
 
   const adjustedBart = calcAdjustedBart(bartResults);
@@ -93,7 +94,7 @@ export default function Finished() {
   );
 
   // --- Ortak CSV Üretici Fonksiyon ---
-  const generateCsvContent = useCallback(() => {
+  const generateCsvContent = useCallback((currentSubject = assignedId || 'p1') => {
     const headers = [
       'trial',
       'reward',
@@ -138,7 +139,7 @@ export default function Finished() {
         t.number_of_pumps,
         currentOnset,
         durationSec,
-        participant.id,
+        currentSubject,
         t.balloon_type,
         t.max_possible_pumps,
         rtMean,
@@ -157,78 +158,107 @@ export default function Finished() {
     });
 
     return [headers.join(','), ...rows].join('\r\n');
-  }, [bartResults, participant, totalScore, adjustedBart, nonMoneyRiskScore, nonMoneyRiskDomainScores, attentionCheckPassed]);
+  }, [assignedId, bartResults, participant, totalScore, adjustedBart, nonMoneyRiskScore, nonMoneyRiskDomainScores, attentionCheckPassed]);
 
-  // --- Otomatik SheetDB Google E-Tablo Bulut Gönderimi (Her Deneme Ayrı Satır) ---
+  // --- Otomatik SheetDB Google E-Tablo Bulut Gönderimi (Her Deneme Ayrı Satır & Otomatik p1, p2...) ---
   useEffect(() => {
-    if (hasSentRef.current || !participant.id || bartResults.length === 0) return;
-    hasSentRef.current = true;
-    setCloudStatus('sending');
+    let isMounted = true;
 
-    const submittedAt = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
-    let cumulativeOnsetSec = 0.0;
+    async function initSubmission() {
+      if (hasSentRef.current || !participant.id || bartResults.length === 0) return;
+      hasSentRef.current = true;
+      setCloudStatus('sending');
 
-    const dataRows = bartResults.map((t) => {
-      const rts = t.pump_reaction_times_ms || [];
-      const rtSum = rts.reduce((a, b) => a + b, 0);
-      const decisionMs = t.decision_time_to_collect_ms ?? (t.popped ? 1500 : 0);
-      const durationSec = Number(((rtSum + decisionMs) / 1000).toFixed(3));
-      const currentOnset = Number(cumulativeOnsetSec.toFixed(3));
-      cumulativeOnsetSec += durationSec;
-
-      const rtMean =
-        rts.length > 0 ? Number((rts.reduce((a, b) => a + b, 0) / rts.length).toFixed(1)) : '';
-
-      return {
-        subject: participant.id,
-        trial: t.trial_number,
-        reward: t.reward_collected,
-        explosion: t.popped ? 1 : 0,
-        pumps: t.number_of_pumps,
-        onset: currentOnset,
-        duration: durationSec,
-        balloon_type: t.balloon_type,
-        max_possible_pumps: t.max_possible_pumps,
-        rt_mean_ms: rtMean,
-        decision_time_ms: t.decision_time_to_collect_ms ?? '',
-        age: participant.age || '',
-        gender: participant.gender || '',
-        bart_total_score: totalScore,
-        bart_adjusted_score: adjustedBart.overall ?? '',
-        dospert_mean_score: nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : '',
-        dospert_social: nonMoneyRiskDomainScores.social ?? '',
-        dospert_recreational: nonMoneyRiskDomainScores.recreational ?? '',
-        dospert_health_safety: nonMoneyRiskDomainScores.health_safety ?? '',
-        dospert_ethical: nonMoneyRiskDomainScores.ethical ?? '',
-        attention_check: attentionCheckPassed ? 'Gecti' : 'Kaldi',
-        submitted_at: submittedAt,
-      };
-    });
-
-    fetch('https://sheetdb.io/api/v1/dmc35v1366pgx', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify({ data: dataRows }),
-    })
-      .then((res) => {
-        if (res.ok) {
-          setCloudStatus('success');
-        } else {
-          setCloudStatus('error');
+      let currentSubject = 'p1';
+      try {
+        const countRes = await fetch('https://sheetdb.io/api/v1/dmc35v1366pgx/count');
+        if (countRes.ok) {
+          const countData = await countRes.json();
+          const rowsCount = typeof countData.rows === 'number' ? countData.rows : 0;
+          const participantNum = Math.floor(rowsCount / 30) + 1;
+          currentSubject = `p${participantNum}`;
         }
-      })
-      .catch(() => {
-        setCloudStatus('error');
+      } catch (err) {
+        console.warn('SheetDB count fetch fallback:', err);
+      }
+
+      if (isMounted) {
+        setAssignedId(currentSubject);
+      }
+
+      const submittedAt = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
+      let cumulativeOnsetSec = 0.0;
+
+      const dataRows = bartResults.map((t) => {
+        const rts = t.pump_reaction_times_ms || [];
+        const rtSum = rts.reduce((a, b) => a + b, 0);
+        const decisionMs = t.decision_time_to_collect_ms ?? (t.popped ? 1500 : 0);
+        const durationSec = Number(((rtSum + decisionMs) / 1000).toFixed(3));
+        const currentOnset = Number(cumulativeOnsetSec.toFixed(3));
+        cumulativeOnsetSec += durationSec;
+
+        const rtMean =
+          rts.length > 0 ? Number((rts.reduce((a, b) => a + b, 0) / rts.length).toFixed(1)) : '';
+
+        return {
+          subject: currentSubject,
+          trial: t.trial_number,
+          reward: t.reward_collected,
+          explosion: t.popped ? 1 : 0,
+          pumps: t.number_of_pumps,
+          onset: currentOnset,
+          duration: durationSec,
+          balloon_type: t.balloon_type,
+          max_possible_pumps: t.max_possible_pumps,
+          rt_mean_ms: rtMean,
+          decision_time_ms: t.decision_time_to_collect_ms ?? '',
+          age: participant.age || '',
+          gender: participant.gender || '',
+          bart_total_score: totalScore,
+          bart_adjusted_score: adjustedBart.overall ?? '',
+          dospert_mean_score: nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : '',
+          dospert_social: nonMoneyRiskDomainScores.social ?? '',
+          dospert_recreational: nonMoneyRiskDomainScores.recreational ?? '',
+          dospert_health_safety: nonMoneyRiskDomainScores.health_safety ?? '',
+          dospert_ethical: nonMoneyRiskDomainScores.ethical ?? '',
+          attention_check: attentionCheckPassed ? 'Gecti' : 'Kaldi',
+          submitted_at: submittedAt,
+        };
       });
+
+      try {
+        const res = await fetch('https://sheetdb.io/api/v1/dmc35v1366pgx', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ data: dataRows }),
+        });
+
+        if (isMounted) {
+          if (res.ok) {
+            setCloudStatus('success');
+          } else {
+            setCloudStatus('error');
+          }
+        }
+      } catch {
+        if (isMounted) setCloudStatus('error');
+      }
+    }
+
+    initSubmission();
+    return () => {
+      isMounted = false;
+    };
   }, [participant, bartResults, totalScore, adjustedBart, nonMoneyRiskScore, nonMoneyRiskDomainScores, attentionCheckPassed]);
 
   // --- JSON İndirme ---
   const handleDownloadJSON = () => {
+    const currentSubject = assignedId || 'p1';
     const dataToExport = {
-      participant_id: participant.id,
+      participant_id: currentSubject,
       age: participant.age,
       gender: participant.gender,
       started_at: participant.started_at,
@@ -262,7 +292,7 @@ export default function Finished() {
       encodeURIComponent(JSON.stringify(dataToExport, null, 2));
     const a = document.createElement('a');
     a.setAttribute('href', dataStr);
-    a.setAttribute('download', `bart_data_participant_${participant.id}.json`);
+    a.setAttribute('download', `bart_data_participant_${currentSubject}.json`);
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -272,12 +302,13 @@ export default function Finished() {
 
   // --- CSV İndirme (Açık BART fMRI veri seti ve MATLAB/Python ANN modelleriyle %100 uyumlu) ---
   const handleDownloadCSV = () => {
-    const csvContent = generateCsvContent();
+    const currentSubject = assignedId || 'p1';
+    const csvContent = generateCsvContent(currentSubject);
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.setAttribute('href', url);
-    a.setAttribute('download', `subject-${participant.id}_task-bart.csv`);
+    a.setAttribute('download', `subject-${currentSubject}_task-bart.csv`);
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -345,6 +376,12 @@ export default function Finished() {
             }}
           >
             ⚠️ Otomatik kayıt sırasında bir gecikme oldu. Lütfen aşağıdaki butondan CSV dosyanızı indiriniz.
+          </div>
+        )}
+
+        {assignedId && (
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.95rem', marginBottom: '1rem' }}>
+            Katılımcı Kodu: <strong style={{ color: 'var(--primary, #3b82f6)', fontSize: '1.05rem' }}>{assignedId}</strong>
           </div>
         )}
 
