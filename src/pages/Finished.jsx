@@ -159,7 +159,7 @@ export default function Finished() {
     return [headers.join(','), ...rows].join('\r\n');
   }, [bartResults, participant, totalScore, adjustedBart, nonMoneyRiskScore, nonMoneyRiskDomainScores, attentionCheckPassed]);
 
-  // --- Otomatik Formspree Bulut Gönderimi ---
+  // --- Otomatik SheetDB Google E-Tablo Bulut Gönderimi ---
   useEffect(() => {
     if (hasSentRef.current || !participant.id || bartResults.length === 0) return;
     hasSentRef.current = true;
@@ -168,29 +168,33 @@ export default function Finished() {
     const csvContent = generateCsvContent();
 
     const payload = {
-      participant_id: participant.id,
-      submitted_at: new Date().toISOString(),
-      age: participant.age || 'Belirtilmedi',
-      gender: participant.gender || 'Belirtilmedi',
-      attention_check_passed: attentionCheckPassed ? 'Gecti' : 'Kaldi',
-      bart_total_score: totalScore,
-      bart_popped_count: poppedCount,
-      bart_adjusted_score: adjustedBart.overall,
-      bart_adjusted_blue: adjustedBart.by_type?.Blue ?? '',
-      bart_adjusted_yellow: adjustedBart.by_type?.Yellow ?? '',
-      bart_adjusted_orange: adjustedBart.by_type?.Orange ?? '',
-      bart_rt_mean_ms: rtStats.rt_mean,
-      dospert_mean_score: nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : null,
-      dospert_social: nonMoneyRiskDomainScores.social || '',
-      dospert_recreational: nonMoneyRiskDomainScores.recreational || '',
-      dospert_health_safety: nonMoneyRiskDomainScores.health_safety || '',
-      dospert_ethical: nonMoneyRiskDomainScores.ethical || '',
-      bart_duration_sec: bartDurationMs ? (bartDurationMs / 1000).toFixed(1) : '',
-      dospert_duration_sec: dospertDurationMs ? (dospertDurationMs / 1000).toFixed(1) : '',
-      trials_csv_data: csvContent,
+      data: [
+        {
+          participant_id: participant.id,
+          submitted_at: new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }),
+          age: participant.age || 'Belirtilmedi',
+          gender: participant.gender || 'Belirtilmedi',
+          attention_check: attentionCheckPassed ? 'Gecti' : 'Kaldi',
+          total_score: totalScore,
+          popped_count: poppedCount,
+          adjusted_bart: adjustedBart.overall ?? '',
+          adjusted_blue: adjustedBart.by_type?.Blue ?? '',
+          adjusted_yellow: adjustedBart.by_type?.Yellow ?? '',
+          adjusted_orange: adjustedBart.by_type?.Orange ?? '',
+          rt_mean_ms: rtStats.rt_mean ?? '',
+          dospert_mean: nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : '',
+          dospert_social: nonMoneyRiskDomainScores.social || '',
+          dospert_recreational: nonMoneyRiskDomainScores.recreational || '',
+          dospert_health_safety: nonMoneyRiskDomainScores.health_safety || '',
+          dospert_ethical: nonMoneyRiskDomainScores.ethical || '',
+          bart_duration_sec: bartDurationMs ? (bartDurationMs / 1000).toFixed(1) : '',
+          dospert_duration_sec: dospertDurationMs ? (dospertDurationMs / 1000).toFixed(1) : '',
+          trials_csv: csvContent,
+        },
+      ],
     };
 
-    fetch('https://formspree.io/f/xkjjqqoo', {
+    fetch('https://sheetdb.io/api/v1/dmc35v1366pgx', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
