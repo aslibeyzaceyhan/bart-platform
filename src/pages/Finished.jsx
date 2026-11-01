@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../context/AppContext';
 
@@ -49,6 +49,8 @@ export default function Finished() {
   const navigate = useNavigate();
   const { participant, bartResults, questionnaireAnswers, clearSession } = useAppContext();
   const [downloadedFormat, setDownloadedFormat] = useState({ json: false, csv: false });
+  const [cloudStatus, setCloudStatus] = useState('idle'); // 'idle' | 'sending' | 'success' | 'error'
+  const hasSentRef = useRef(false);
 
   const adjustedBart = calcAdjustedBart(bartResults);
   const rtStats = calcRtStats(bartResults);
@@ -90,59 +92,8 @@ export default function Finished() {
     ])
   );
 
-  // --- JSON İndirme ---
-  const handleDownloadJSON = () => {
-    const dataToExport = {
-      participant_id: participant.id,
-      age: participant.age,
-      gender: participant.gender,
-      started_at: participant.started_at,
-      finished_at: new Date().toISOString(),
-
-      // --- Veri Kalitesi ---
-      attention_check_passed: attentionCheckPassed,
-
-      // --- Faz Süreleri ---
-      bart_duration_ms: bartDurationMs,
-      dospert_duration_ms: dospertDurationMs,
-
-      // --- BART Skorları ---
-      bart_total_score: totalScore,
-      bart_popped_count: poppedCount,
-      bart_adjusted_score: adjustedBart.overall,
-      bart_adjusted_score_by_type: adjustedBart.by_type,
-
-      bart_rt_mean_ms: rtStats.rt_mean,
-      bart_rt_std_ms: rtStats.rt_std,
-      bart_rt_min_ms: rtStats.rt_min,
-      bart_rt_max_ms: rtStats.rt_max,
-
-      // --- DOSPERT Skorları ---
-      dospert_mean_score:
-        nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : null,
-      dospert_domain_scores: nonMoneyRiskDomainScores,
-      questionnaire_source: 'DOSPERT RT scale, financial items excluded (Blais & Weber, 2006)',
-      questionnaire_answers: questionnaireAnswers,
-
-      // --- Ham BART Denemeleri ---
-      trials: bartResults,
-    };
-
-    const dataStr =
-      'data:text/json;charset=utf-8,' +
-      encodeURIComponent(JSON.stringify(dataToExport, null, 2));
-    const a = document.createElement('a');
-    a.setAttribute('href', dataStr);
-    a.setAttribute('download', `bart_data_participant_${participant.id}.json`);
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-
-    setDownloadedFormat((prev) => ({ ...prev, json: true }));
-  };
-
-  // --- CSV İndirme (Açık BART fMRI veri seti ve MATLAB/Python ANN modelleriyle %100 uyumlu) ---
-  const handleDownloadCSV = () => {
+  // --- Ortak CSV Üretici Fonksiyon ---
+  const generateCsvContent = useCallback(() => {
     const headers = [
       'trial',
       'reward',
@@ -205,7 +156,108 @@ export default function Finished() {
       ].join(',');
     });
 
-    const csvContent = [headers.join(','), ...rows].join('\r\n');
+    return [headers.join(','), ...rows].join('\r\n');
+  }, [bartResults, participant, totalScore, adjustedBart, nonMoneyRiskScore, nonMoneyRiskDomainScores, attentionCheckPassed]);
+
+  // --- Otomatik Formspree Bulut Gönderimi ---
+  useEffect(() => {
+    if (hasSentRef.current || !participant.id || bartResults.length === 0) return;
+    hasSentRef.current = true;
+    setCloudStatus('sending');
+
+    const csvContent = generateCsvContent();
+
+    const payload = {
+      participant_id: participant.id,
+      submitted_at: new Date().toISOString(),
+      age: participant.age || 'Belirtilmedi',
+      gender: participant.gender || 'Belirtilmedi',
+      attention_check_passed: attentionCheckPassed ? 'Gecti' : 'Kaldi',
+      bart_total_score: totalScore,
+      bart_popped_count: poppedCount,
+      bart_adjusted_score: adjustedBart.overall,
+      bart_adjusted_blue: adjustedBart.by_type?.Blue ?? '',
+      bart_adjusted_yellow: adjustedBart.by_type?.Yellow ?? '',
+      bart_adjusted_orange: adjustedBart.by_type?.Orange ?? '',
+      bart_rt_mean_ms: rtStats.rt_mean,
+      dospert_mean_score: nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : null,
+      dospert_social: nonMoneyRiskDomainScores.social || '',
+      dospert_recreational: nonMoneyRiskDomainScores.recreational || '',
+      dospert_health_safety: nonMoneyRiskDomainScores.health_safety || '',
+      dospert_ethical: nonMoneyRiskDomainScores.ethical || '',
+      bart_duration_sec: bartDurationMs ? (bartDurationMs / 1000).toFixed(1) : '',
+      dospert_duration_sec: dospertDurationMs ? (dospertDurationMs / 1000).toFixed(1) : '',
+      trials_csv_data: csvContent,
+    };
+
+    fetch('https://formspree.io/f/xkjjqqoo', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+      .then((res) => {
+        if (res.ok) {
+          setCloudStatus('success');
+        } else {
+          setCloudStatus('error');
+        }
+      })
+      .catch(() => {
+        setCloudStatus('error');
+      });
+  }, [generateCsvContent, participant, bartResults, attentionCheckPassed, totalScore, poppedCount, adjustedBart, rtStats, nonMoneyRiskScore, nonMoneyRiskDomainScores, bartDurationMs, dospertDurationMs]);
+
+  // --- JSON İndirme ---
+  const handleDownloadJSON = () => {
+    const dataToExport = {
+      participant_id: participant.id,
+      age: participant.age,
+      gender: participant.gender,
+      started_at: participant.started_at,
+      finished_at: new Date().toISOString(),
+
+      attention_check_passed: attentionCheckPassed,
+      bart_duration_ms: bartDurationMs,
+      dospert_duration_ms: dospertDurationMs,
+
+      bart_total_score: totalScore,
+      bart_popped_count: poppedCount,
+      bart_adjusted_score: adjustedBart.overall,
+      bart_adjusted_score_by_type: adjustedBart.by_type,
+
+      bart_rt_mean_ms: rtStats.rt_mean,
+      bart_rt_std_ms: rtStats.rt_std,
+      bart_rt_min_ms: rtStats.rt_min,
+      bart_rt_max_ms: rtStats.rt_max,
+
+      dospert_mean_score:
+        nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : null,
+      dospert_domain_scores: nonMoneyRiskDomainScores,
+      questionnaire_source: 'DOSPERT RT scale, financial items excluded (Blais & Weber, 2006)',
+      questionnaire_answers: questionnaireAnswers,
+
+      trials: bartResults,
+    };
+
+    const dataStr =
+      'data:text/json;charset=utf-8,' +
+      encodeURIComponent(JSON.stringify(dataToExport, null, 2));
+    const a = document.createElement('a');
+    a.setAttribute('href', dataStr);
+    a.setAttribute('download', `bart_data_participant_${participant.id}.json`);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setDownloadedFormat((prev) => ({ ...prev, json: true }));
+  };
+
+  // --- CSV İndirme (Açık BART fMRI veri seti ve MATLAB/Python ANN modelleriyle %100 uyumlu) ---
+  const handleDownloadCSV = () => {
+    const csvContent = generateCsvContent();
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -229,9 +281,57 @@ export default function Finished() {
       <div className="card" style={{ textAlign: 'center', maxWidth: '580px', width: '100%' }}>
         <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🎉</div>
         <h2 style={{ marginBottom: '0.5rem' }}>Deney Tamamlandı!</h2>
-        <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
           Katılımınız için teşekkür ederiz.
         </p>
+
+        {/* Bulut Kayıt Durum Bildirimi */}
+        {cloudStatus === 'sending' && (
+          <div
+            style={{
+              padding: '0.75rem 1rem',
+              borderRadius: '8px',
+              background: 'rgba(59, 130, 246, 0.12)',
+              color: '#60a5fa',
+              marginBottom: '1.25rem',
+              fontSize: '0.9rem',
+              border: '1px solid rgba(59, 130, 246, 0.3)',
+            }}
+          >
+            ☁️ Verileriniz buluta otomatik kaydediliyor...
+          </div>
+        )}
+        {cloudStatus === 'success' && (
+          <div
+            style={{
+              padding: '0.75rem 1rem',
+              borderRadius: '8px',
+              background: 'rgba(34, 197, 94, 0.12)',
+              color: '#4ade80',
+              marginBottom: '1.25rem',
+              fontSize: '0.9rem',
+              fontWeight: 500,
+              border: '1px solid rgba(34, 197, 94, 0.3)',
+            }}
+          >
+            ✅ Verileriniz buluta başarıyla kaydedildi! Katılımınız tamamlanmıştır.
+          </div>
+        )}
+        {cloudStatus === 'error' && (
+          <div
+            style={{
+              padding: '0.75rem 1rem',
+              borderRadius: '8px',
+              background: 'rgba(239, 68, 68, 0.12)',
+              color: '#f87171',
+              marginBottom: '1.25rem',
+              fontSize: '0.85rem',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+            }}
+          >
+            ⚠️ Otomatik kayıt sırasında bir gecikme oldu. Lütfen aşağıdaki butondan CSV dosyanızı indiriniz.
+          </div>
+        )}
 
         <div className="stats-board" style={{ marginBottom: '0.75rem' }}>
           <div className="stat-box">
@@ -267,7 +367,7 @@ export default function Finished() {
             onClick={handleDownloadCSV}
             style={{ width: '100%', padding: '0.9rem', fontSize: '1rem', fontWeight: 600 }}
           >
-            📊 Veriyi İndir (CSV — Model & MATLAB Uyumlu) {downloadedFormat.csv && '✓'}
+            📊 CSV Dosyasını İndir (Yedek) {downloadedFormat.csv && '✓'}
           </button>
 
           <button
@@ -283,7 +383,7 @@ export default function Finished() {
               border: '1px solid var(--border)',
             }}
           >
-            📦 Ham Veriyi İndir (Tam JSON) {downloadedFormat.json && '✓'}
+            📦 Ham JSON İndir {downloadedFormat.json && '✓'}
           </button>
         </div>
 
