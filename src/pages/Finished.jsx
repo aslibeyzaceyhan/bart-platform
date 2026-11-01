@@ -159,40 +159,51 @@ export default function Finished() {
     return [headers.join(','), ...rows].join('\r\n');
   }, [bartResults, participant, totalScore, adjustedBart, nonMoneyRiskScore, nonMoneyRiskDomainScores, attentionCheckPassed]);
 
-  // --- Otomatik SheetDB Google E-Tablo Bulut Gönderimi ---
+  // --- Otomatik SheetDB Google E-Tablo Bulut Gönderimi (Her Deneme Ayrı Satır) ---
   useEffect(() => {
     if (hasSentRef.current || !participant.id || bartResults.length === 0) return;
     hasSentRef.current = true;
     setCloudStatus('sending');
 
-    const csvContent = generateCsvContent();
+    const submittedAt = new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
+    let cumulativeOnsetSec = 0.0;
 
-    const payload = {
-      data: [
-        {
-          participant_id: participant.id,
-          submitted_at: new Date().toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }),
-          age: participant.age || 'Belirtilmedi',
-          gender: participant.gender || 'Belirtilmedi',
-          attention_check: attentionCheckPassed ? 'Gecti' : 'Kaldi',
-          total_score: totalScore,
-          popped_count: poppedCount,
-          adjusted_bart: adjustedBart.overall ?? '',
-          adjusted_blue: adjustedBart.by_type?.Blue ?? '',
-          adjusted_yellow: adjustedBart.by_type?.Yellow ?? '',
-          adjusted_orange: adjustedBart.by_type?.Orange ?? '',
-          rt_mean_ms: rtStats.rt_mean ?? '',
-          dospert_mean: nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : '',
-          dospert_social: nonMoneyRiskDomainScores.social || '',
-          dospert_recreational: nonMoneyRiskDomainScores.recreational || '',
-          dospert_health_safety: nonMoneyRiskDomainScores.health_safety || '',
-          dospert_ethical: nonMoneyRiskDomainScores.ethical || '',
-          bart_duration_sec: bartDurationMs ? (bartDurationMs / 1000).toFixed(1) : '',
-          dospert_duration_sec: dospertDurationMs ? (dospertDurationMs / 1000).toFixed(1) : '',
-          trials_csv: csvContent,
-        },
-      ],
-    };
+    const dataRows = bartResults.map((t) => {
+      const rts = t.pump_reaction_times_ms || [];
+      const rtSum = rts.reduce((a, b) => a + b, 0);
+      const decisionMs = t.decision_time_to_collect_ms ?? (t.popped ? 1500 : 0);
+      const durationSec = Number(((rtSum + decisionMs) / 1000).toFixed(3));
+      const currentOnset = Number(cumulativeOnsetSec.toFixed(3));
+      cumulativeOnsetSec += durationSec;
+
+      const rtMean =
+        rts.length > 0 ? Number((rts.reduce((a, b) => a + b, 0) / rts.length).toFixed(1)) : '';
+
+      return {
+        subject: participant.id,
+        trial: t.trial_number,
+        reward: t.reward_collected,
+        explosion: t.popped ? 1 : 0,
+        pumps: t.number_of_pumps,
+        onset: currentOnset,
+        duration: durationSec,
+        balloon_type: t.balloon_type,
+        max_possible_pumps: t.max_possible_pumps,
+        rt_mean_ms: rtMean,
+        decision_time_ms: t.decision_time_to_collect_ms ?? '',
+        age: participant.age || '',
+        gender: participant.gender || '',
+        bart_total_score: totalScore,
+        bart_adjusted_score: adjustedBart.overall ?? '',
+        dospert_mean_score: nonMoneyRiskScore !== null ? Number(nonMoneyRiskScore.toFixed(2)) : '',
+        dospert_social: nonMoneyRiskDomainScores.social ?? '',
+        dospert_recreational: nonMoneyRiskDomainScores.recreational ?? '',
+        dospert_health_safety: nonMoneyRiskDomainScores.health_safety ?? '',
+        dospert_ethical: nonMoneyRiskDomainScores.ethical ?? '',
+        attention_check: attentionCheckPassed ? 'Gecti' : 'Kaldi',
+        submitted_at: submittedAt,
+      };
+    });
 
     fetch('https://sheetdb.io/api/v1/dmc35v1366pgx', {
       method: 'POST',
@@ -200,7 +211,7 @@ export default function Finished() {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ data: dataRows }),
     })
       .then((res) => {
         if (res.ok) {
@@ -212,7 +223,7 @@ export default function Finished() {
       .catch(() => {
         setCloudStatus('error');
       });
-  }, [generateCsvContent, participant, bartResults, attentionCheckPassed, totalScore, poppedCount, adjustedBart, rtStats, nonMoneyRiskScore, nonMoneyRiskDomainScores, bartDurationMs, dospertDurationMs]);
+  }, [participant, bartResults, totalScore, adjustedBart, nonMoneyRiskScore, nonMoneyRiskDomainScores, attentionCheckPassed]);
 
   // --- JSON İndirme ---
   const handleDownloadJSON = () => {
