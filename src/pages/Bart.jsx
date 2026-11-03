@@ -30,6 +30,7 @@ export default function Bart() {
   const [pumpCount, setPumpCount] = useState(0);
   const [totalBank, setTotalBank] = useState(0);
   const [popped, setPopped] = useState(false);
+  const isActionLockedRef = useRef(false);
   
   // Tepki süreleri için ref'ler
   const lastInteractionTimeUserRef = useRef(Date.now());
@@ -72,6 +73,7 @@ export default function Bart() {
       setCurrentTrialIndex(prev => prev + 1);
       setPumpCount(0);
       setPopped(false);
+      isActionLockedRef.current = false;
     } else {
       // Test bitti — bitiş zamanını kaydet, sorulara geç
       updateParticipant({ bart_finished_at: new Date().toISOString() });
@@ -81,7 +83,7 @@ export default function Bart() {
 
 
   const handlePump = () => {
-    if (popped) return;
+    if (popped || isActionLockedRef.current) return;
 
     // Reaction time kaydet
     const now = Date.now();
@@ -97,6 +99,7 @@ export default function Bart() {
     
     if (Math.random() < probabilityOfPopping || currentPumps >= currentTrial.maxPumps) {
       // Patladı
+      isActionLockedRef.current = true;
       setPopped(true);
       setPumpCount(currentPumps);
       // Kısa bir bekleme (Animasyon görülsün diye) 
@@ -110,7 +113,8 @@ export default function Bart() {
   };
 
   const handleCollect = () => {
-    if (popped || pumpCount === 0) return;
+    if (popped || pumpCount === 0 || isActionLockedRef.current) return;
+    isActionLockedRef.current = true;
     const reward = pumpCount; // 1 pump = 1 puan
     setTotalBank(prev => prev + reward);
     handleNextTrial(reward, false, pumpCount);
