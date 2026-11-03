@@ -53,7 +53,7 @@ export default function Bart() {
     }
   }, [currentTrialIndex, popped]);
 
-  const handleNextTrial = (reward) => {
+  const handleNextTrial = (reward, isPopped, finalPumps) => {
     // Veriyi kaydet
     const decisionTime = Date.now() - lastInteractionTimeUserRef.current;
     
@@ -61,11 +61,11 @@ export default function Bart() {
       trial_number: currentTrialIndex + 1,
       balloon_type: currentTrial.type,
       max_possible_pumps: currentTrial.maxPumps,
-      number_of_pumps: pumpCount,
-      popped: popped,
+      number_of_pumps: finalPumps,
+      popped: isPopped,
       reward_collected: reward,
       pump_reaction_times_ms: reactionTimesRef.current,
-      decision_time_to_collect_ms: popped ? null : decisionTime
+      decision_time_to_collect_ms: isPopped ? null : decisionTime
     });
 
     if (currentTrialIndex < trials.length - 1) {
@@ -89,20 +89,23 @@ export default function Bart() {
     reactionTimesRef.current.push(rt);
     lastInteractionTimeUserRef.current = now;
 
+    const currentPumps = pumpCount + 1;
+
     // Patlama algoritması (Olasılık: 1 / (Max - Mevcut Şişirme))
     // Örnek: Max 32. İlk pompada (1/32). Eğer patlamazsa currentPump=1 olur, sonraki (1/31)...
     const probabilityOfPopping = 1 / (currentTrial.maxPumps - pumpCount);
     
-    if (Math.random() < probabilityOfPopping || pumpCount + 1 >= currentTrial.maxPumps) {
+    if (Math.random() < probabilityOfPopping || currentPumps >= currentTrial.maxPumps) {
       // Patladı
       setPopped(true);
+      setPumpCount(currentPumps);
       // Kısa bir bekleme (Animasyon görülsün diye) 
       setTimeout(() => {
-        handleNextTrial(0);
+        handleNextTrial(0, true, currentPumps);
       }, 1500);
     } else {
       // Şişti
-      setPumpCount(prev => prev + 1);
+      setPumpCount(currentPumps);
     }
   };
 
@@ -110,7 +113,7 @@ export default function Bart() {
     if (popped || pumpCount === 0) return;
     const reward = pumpCount; // 1 pump = 1 puan
     setTotalBank(prev => prev + reward);
-    handleNextTrial(reward);
+    handleNextTrial(reward, false, pumpCount);
   };
 
   // Balonun css scale değeri. 
